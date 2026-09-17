@@ -11,6 +11,7 @@ cycles instead of reopening the port each time.
 import wave
 import time
 import re
+import struct
 
 MAX_INFLIGHT_SECONDS = 1.0
 BYTES_PER_SECOND = 16000 * 2  # 16kHz * 16-bit mono
@@ -18,6 +19,9 @@ CHUNK_FRAMES = 1024
 CHUNK_DURATION = CHUNK_FRAMES / 16000.0
 
 FREE_LINE_RE = re.compile(rb"FREE:(\d+)")
+
+# Keep comfortably under the firmware's MAX_DISPLAY_TEXT (250 bytes).
+MAX_TEXT_BYTES = 240
 
 
 def drain_status_lines(ser, last_free):
@@ -38,6 +42,44 @@ def drain_status_lines(ser, last_free):
             if text:
                 print("[ESP32]", text)
     return last_free
+
+
+def _truncate_utf8(text, max_bytes):
+    """Truncates to at most max_bytes of UTF-8 without splitting a
+    multi-byte character in half."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def send_text(ser, text):
+    """
+    Sends a TEXT header (magic + 2-byte length + UTF-8 payload) so
+    the ESP32 can show what's about to be spoken on its OLED.
+    Call this BEFORE send_wav() for the same reply.
+    """
+    text = text.strip()
+    if not text:
+        return
+
+    truncated = _truncate_utf8(text, MAX_TEXT_BYTES)
+    if truncated != text:
+        truncated = _truncate_utf8(text, MAX_TEXT_BYTES - 3) + "..."
+
+    payload = truncated.encode("utf-8")
+
+    ser.write(b"TEXT")
+    ser.write(struct.pack("<H", len(payload)))
+    ser.write(payload)
+    ser.flush()
+
+
+def send_reply(ser, wav_path, text):
+    """Sends the display text, then streams the audio — use this
+    for both a fresh reply and a repeat."""
+    send_text(ser, text)
+    send_wav(ser, wav_path)
 
 
 def send_wav(ser, wav_path):

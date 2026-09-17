@@ -46,7 +46,7 @@ def main():
             if trigger == "repeat":
                 print("[Repeat] Resending last reply...")
                 if os.path.exists(REPLY_WAV):
-                    speaker.send_wav(ser, REPLY_WAV)
+                    speaker.send_reply(ser, reply_path, answer)
                 else:
                     print("No previous reply to repeat yet.")
                 continue
@@ -80,7 +80,7 @@ def main():
                 continue
 
             # 4) Stream the reply back to the ESP32 speaker
-            speaker.send_wav(ser, reply_path)
+            speaker.send_reply(ser, reply_path, answer)
 
     except KeyboardInterrupt:
         print("\nStopping.")

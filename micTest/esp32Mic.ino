@@ -7,7 +7,7 @@
 // PINS
 // =====================================================
 
-#define BUTTON_PIN 4
+#define BUTTON_PIN 35
 
 #define OLED_SDA 21
 #define OLED_SCL 22
