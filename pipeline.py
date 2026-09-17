@@ -14,7 +14,7 @@ Run:
 
 import serial
 import time
-
+import os
 import recorder
 import stt
 import tts
@@ -41,6 +41,16 @@ def main():
         while True:
             # 1) Wait for a full recording (AUD0 ... AUD1)
             print("\nWaiting for a recording...")
+            trigger = recorder.wait_for_trigger(ser)
+
+            if trigger == "repeat":
+                print("[Repeat] Resending last reply...")
+                if os.path.exists(REPLY_WAV):
+                    speaker.send_wav(ser, REPLY_WAV)
+                else:
+                    print("No previous reply to repeat yet.")
+                continue
+
             raw_audio = recorder.receive_recording(ser)
             print(f"[Recorder] Received {len(raw_audio)} bytes.")
 

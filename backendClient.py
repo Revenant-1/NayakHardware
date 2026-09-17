@@ -1,59 +1,78 @@
 """
-Client for the Nayak Legal Assistant backend (api_server.py).
+Gemini client for Nayak Legal Assistant.
 
-Only talks to /api/command — audio-to-text is still done locally
-by stt.py (faster-whisper). This module just takes the recognized
-text, sends it to the backend, and returns the answer to speak.
-
-Install:
-    pip install requests
+STT is still done locally by stt.py.
+This module takes the recognized text and sends it directly to Gemini.
 """
 
-import requests
+from google import genai
 
-BASE_URL = "http://127.0.0.1:8000"  # change to wherever api_server.py runs
+# =========================
+# CONFIG
+# =========================
 
-_token = None
-_session_id = None
+GEMINI_API_KEY = "AIzaSyCJufq2qSfoluKRySS0eyHe6aFPbdbb8zc"
 
+MODEL = "gemini-3.5-flash"
 
-def _login():
-    """Guest login — swap this for /api/auth/login if you want a
-    persistent account instead of a fresh guest each run."""
-    global _token
-    resp = requests.post(f"{BASE_URL}/api/auth/guest-login", timeout=10)
-    resp.raise_for_status()
-    _token = resp.json()["token"]
-    return _token
+SYSTEM_PROMPT = """
+You are Nayak, a legal assistant.
 
+Your job is to help the user understand legal issues clearly and accurately.
 
-def _auth_headers():
-    if _token is None:
-        _login()
-    return {"Authorization": f"Bearer {_token}"}
+Rules:
+- Give concise, practical answers.
+- Explain legal concepts in plain language.
+- Clearly distinguish general legal information from legal advice.
+- If jurisdiction matters, ask for or identify the relevant jurisdiction.
+- Do not invent laws, cases, sections, or legal authorities.
+- If you are uncertain, say so.
+- When appropriate, structure answers with bullets or numbered steps.
+- Since your answers may be spoken aloud, avoid unnecessary formatting.
+"""
+
+# =========================
+# GEMINI CLIENT
+# =========================
+
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+# Conversation history
+history = []
 
 
 def ask(text):
     """
-    Sends recognized text to /api/command and returns the assistant's
-    answer text. Keeps the same session_id across calls so the
-    backend has conversational context.
-    """
-    global _session_id
-    headers = _auth_headers()
+    Sends recognized STT text to Gemini and returns the response.
 
-    resp = requests.post(
-        f"{BASE_URL}/api/command",
-        headers=headers,
-        json={"text": text, "session_id": _session_id},
-        timeout=60,
+    Example:
+        response = ask("What is the limitation period for a civil suit?")
+    """
+
+    global history
+
+    # Add user's message
+    history.append({
+        "role": "user",
+        "parts": [{"text": text}]
+    })
+
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=history,
+        config=genai.types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.3,
+            max_output_tokens=1000,
+        ),
     )
 
-    if resp.status_code == 401:
-        _login()
-        return ask(text)
+    answer = response.text
 
-    resp.raise_for_status()
-    result = resp.json()
-    _session_id = result.get("session_id", _session_id)
-    return result["response"]
+    # Add Gemini's response to conversation history
+    history.append({
+        "role": "model",
+        "parts": [{"text": answer}]
+    })
+
+    return answer

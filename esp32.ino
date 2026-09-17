@@ -8,12 +8,15 @@
 // status, using a SINGLE I2S peripheral (I2S_NUM_0), switched
 // between RX (mic) and TX (speaker) at the natural handoff points:
 //
-//   1. Press button       -> switch to mic mode, start recording
-//   2. Press button again -> stop recording, audio streams to PC
-//   3. PC does STT -> TTS, then streams reply audio back
+//   1. Press RECORD button -> switch to mic mode, start recording
+//   2. Press it again      -> stop recording, audio streams to PC
+//   3. PC does STT -> backend -> TTS, then streams reply audio back
 //   4. Right after recording stops, we switch to speaker mode and
 //      wait for that reply; once it finishes playing, we switch
 //      back to mic mode and return to idle.
+//
+//   Press REPEAT button (while idle) -> asks the PC to resend and
+//      replay the last reply, without recording anything new.
 //
 // Some ESP32 boards/variants only expose one usable I2S peripheral,
 // so this avoids ever requesting a second one (I2S_NUM_1).
@@ -23,7 +26,8 @@
 // PINS
 // ============================================================
 
-#define BUTTON_PIN 4
+#define BUTTON_PIN 4          // press to record / stop
+#define REPEAT_BUTTON_PIN 18   // press to replay the last reply
 
 #define OLED_SDA 21
 #define OLED_SCL 22
@@ -48,6 +52,15 @@
 #define SERIAL_BAUD 921600
 
 #define MIC_I2S_BUFFER_SAMPLES 256
+
+// Digital volume gain applied to outgoing speaker audio.
+// 1.0 = unchanged. Values above 1.0 boost volume but will clip
+// (distort) if pushed too far, since 16-bit samples can't exceed
+// +/-32767. Start around 1.3-1.8 and back off if it sounds harsh.
+// For more volume than this can safely give you, look at the
+// MAX98357A's GAIN pin instead (see README) - it's a hardware gain
+// select (9/12/15/18 dB) independent of this software gain.
+#define VOLUME_GAIN 1.6f
 
 // Ring buffer for the SPEAKER path only.
 // 64 KB ~= 2 seconds of 16kHz/16-bit/mono audio.
@@ -344,7 +357,10 @@ void speakerTask(void* parameter)
         int16_t* samples = (int16_t*)i2sBuffer;
         size_t sampleCount = bytesRead / 2;
         for (size_t i = 0; i < sampleCount; i++) {
-            samples[i] = samples[i] * 0.85f; // slight headroom
+            int32_t boosted = (int32_t)(samples[i] * VOLUME_GAIN);
+            if (boosted > 32767) boosted = 32767;
+            if (boosted < -32768) boosted = -32768;
+            samples[i] = (int16_t)boosted;
         }
 
         size_t bytesWritten = 0;
@@ -481,12 +497,39 @@ void recordAndStream()
 }
 
 // ============================================================
+// REPEAT PROTOCOL (asks the PC to resend the last reply)
+// ============================================================
+//
+// RPT0
+//
+// Just a 4-byte marker — no binary framing follows it, so unlike
+// AUD0 there's no need to silence the status task around it.
+
+void requestRepeat()
+{
+    systemState = STATE_WAITING_REPLY;
+    setDisplay("Repeating...");
+
+    Serial.write((const uint8_t *)"RPT0", 4);
+    Serial.flush();
+
+    clearRingBuffer();
+
+    esp_err_t speakerError = ESP_OK;
+    if (!installSpeakerRole(&speakerError)) {
+        char msg[32];
+        snprintf(msg, sizeof(msg), "Spk FAIL code %d", (int)speakerError);
+        setDisplay(msg);
+    }
+}
+
+// ============================================================
 // BUTTON HELPERS
 // ============================================================
 
-void waitForButtonRelease()
+void waitForButtonRelease(int pin)
 {
-    while (digitalRead(BUTTON_PIN) == LOW) {
+    while (digitalRead(pin) == LOW) {
         delay(10);
     }
     delay(50);
@@ -502,6 +545,7 @@ void setup()
     delay(1000);
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(REPEAT_BUTTON_PIN, INPUT_PULLUP);
 
     oledMutex = xSemaphoreCreateMutex();
 
@@ -528,14 +572,21 @@ void setup()
 
 void loop()
 {
-    if (systemState == STATE_IDLE &&
-        i2sRole == I2S_ROLE_MIC &&
-        digitalRead(BUTTON_PIN) == LOW) {
+    if (systemState == STATE_IDLE && i2sRole == I2S_ROLE_MIC) {
 
-        delay(50);
         if (digitalRead(BUTTON_PIN) == LOW) {
-            recordAndStream();   // blocks until second button press
-            waitForButtonRelease();
+            delay(50);
+            if (digitalRead(BUTTON_PIN) == LOW) {
+                recordAndStream();   // blocks until second button press
+                waitForButtonRelease(BUTTON_PIN);
+            }
+        }
+        else if (digitalRead(REPEAT_BUTTON_PIN) == LOW) {
+            delay(50);
+            if (digitalRead(REPEAT_BUTTON_PIN) == LOW) {
+                requestRepeat();
+                waitForButtonRelease(REPEAT_BUTTON_PIN);
+            }
         }
     }
 

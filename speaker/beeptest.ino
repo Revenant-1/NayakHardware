@@ -1,9 +1,9 @@
 #include <Arduino.h>
 #include "driver/i2s.h"
 
-#define I2S_BCLK  27
+#define I2S_BCLK  13
 #define I2S_LRC   33
-#define I2S_DIN   13
+#define I2S_DIN   27
 
 #define SAMPLE_RATE 44100
 #define I2S_PORT I2S_NUM_0

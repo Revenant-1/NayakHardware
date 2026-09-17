@@ -56,15 +56,48 @@ def _find_magic(ser, magic):
             return
 
 
+TRIGGERS = {
+    b"AUD0": "record",  # button pressed -> new recording is starting
+    b"RPT0": "repeat",  # repeat button pressed -> resend the last reply
+}
+
+
+def wait_for_trigger(ser):
+    """
+    Scans incoming serial bytes for either the AUD0 (start of a new
+    recording) or RPT0 (repeat the last reply) marker.
+
+    Returns "record" or "repeat" depending on which one arrived.
+    The matched marker bytes are consumed; for "record", the stream
+    is now positioned right where receive_recording() should start
+    reading (i.e. call it next, without waiting for AUD0 again).
+    """
+    max_len = max(len(k) for k in TRIGGERS)
+    buf = bytearray()
+
+    while True:
+        b = ser.read(1)
+        if not b:
+            continue
+        buf.append(b[0])
+        if len(buf) > max_len:
+            buf.pop(0)
+
+        match = TRIGGERS.get(bytes(buf))
+        if match:
+            return match
+
+
 def receive_recording(ser, on_progress=None):
     """
-    Blocks until it sees the AUD0 marker (i.e. until the button is
-    pressed on the ESP32), then reads CHNK-framed audio until AUD1.
+    Reads CHNK-framed audio until AUD1.
+
+    Assumes the AUD0 marker has ALREADY been consumed — call
+    wait_for_trigger(ser) first and only call this when it returns
+    "record".
 
     Returns the raw bytes (int32 PCM, 16 kHz, mono).
     """
-    _find_magic(ser, b"AUD0")
-
     raw = bytearray()
 
     while True:
